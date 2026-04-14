@@ -1,4 +1,4 @@
-from em import EM
+from .em import EM
 
 
 __all__ = ["EM"]

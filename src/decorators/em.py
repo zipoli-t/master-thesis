@@ -83,7 +83,7 @@ class EM:
             if not isinstance(val, (int, float)) or val < 0:
                 raise ValueError(f"{name} must be a non-negative number.")
 
-        X = check_array(X, force_all_finite='allow-nan')
+        X = check_array(X, ensure_all_finite='allow-nan')
         nan_mask = np.isnan(X)
         
         if np.any(np.all(nan_mask, axis=0)):
