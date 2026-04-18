@@ -16,71 +16,77 @@ class NipalsPCA(TransformerMixin, BaseEstimator):
         self.n_components = n_components
         super().__init__()
 
-    def fit(self, X, y=None, warm_start=None, rtol=1e-5, atol=1e-8, max_iter=100):
+    def fit(self, X, y=None, warm_start=None, atol=1e-8, max_iter=100):
         X = validate_data(self, X=X, y=y, reset=True)
         n_samples, n_features = X.shape        
         self.n_components_ = self.n_components or min(n_samples, n_features)
         
         self.mean_ = np.mean(X, axis=0)
-        X_h = np.copy(X) - self.mean_
+        X_h = (X - self.mean_).copy()
         
         total_ss = np.sum(X_h**2)
-        loadings = np.zeros((self.n_components_, n_features))
-        ess = np.zeros((self.n_components_,))
+        loadings_list = []
+        ess = np.zeros(self.n_components_)
 
         for h in range(self.n_components_):
-            # Stability: Start with the column of X_h with max variance
-            if warm_start is not None:
-                p_h = warm_start[h]
+            # 1. Initialization
+            if warm_start is not None and h < len(warm_start):
+                p_h = warm_start[h].copy()
             else:
-                # Initialize p_h with a column of X_h (must be n_features long)
-                # A common trick is taking a row or a unit vector
-                p_h = np.ones(n_features)
-                p_h /= np.linalg.norm(p_h)
+                var_idx = np.argmax(np.sum(X_h**2, axis=0))
+                p_h = X_h[:, var_idx]
+                if n_samples > n_features:
+                    p_h = np.dot(X_h.T, p_h)
+            
+            p_h /= (np.linalg.norm(p_h) + 1e-12)
 
             for _ in range(max_iter):
                 f_h = np.dot(X_h, p_h) 
+                f_norm_sq = np.dot(f_h, f_h)
                 
-                denom = np.dot(f_h.T, f_h)
-                if denom < 1e-12: 
-                    p_star = p_h # Avoid break without assignment
+                if f_norm_sq < 1e-12: 
+                    p_star = p_h
                     break 
                 
-                p_star = np.dot(f_h.T, X_h) / denom
-                p_star /= np.linalg.norm(p_star)
-                f_h = np.dot(X_h, p_star)
-
-                # Sign-agnostic convergence check
-                diff_pos = np.linalg.norm(p_h - p_star)
-                diff_neg = np.linalg.norm(p_h + p_star)
+                p_star = np.dot(X_h.T, f_h) / f_norm_sq
                 
-                if min(diff_pos, diff_neg) < atol:
-                    # Align sign to p_h for consistency
-                    if diff_neg < diff_pos:
-                        p_star = -p_star
+                # 2. Sequential MGS for Loadings
+                for loading in loadings_list:
+                    p_star -= np.dot(p_star, loading) * loading
+                
+                p_star /= (np.linalg.norm(p_star) + 1e-12)
+
+                # Convergence check
+                if min(np.linalg.norm(p_h - p_star), np.linalg.norm(p_h + p_star)) < atol:
+                    p_h = p_star
                     break
                 p_h = p_star
             
-            f_star = np.dot(X_h, p_star)
-            ess[h] = np.dot(f_star.T, f_star)
+            # 3. Final Score
+            f_star = np.dot(X_h, p_h)
+            ess[h] = np.dot(f_star, f_star)
             
-            # Deflation
-            X_h = X_h - np.outer(f_star, p_star)
-            loadings[h] = p_star
+            # 4. Double-Pass Deflation (The fix for scores orthogonality)
+            # First pass removes the variance
+            X_h -= np.outer(f_star, p_h)
+            # Second pass removes numerical noise/leakage
+            X_h -= np.outer(np.dot(X_h, p_h), p_h)
+            
+            loadings_list.append(p_h)
         
-        self.components_ = loadings
-        # n_samples - 1 for unbiased variance estimation
+        self.components_ = np.vstack(loadings_list)
         self.explained_variance_ = ess / (n_samples - 1)
         self.explained_variance_ratio_ = ess / total_ss
+        
         return self
     
     def transform(self, X):
         check_is_fitted(self)
         X = validate_data(self, X=X, y="no_validation", reset=False)
-        Xc = X - self.mean_
-        return np.dot(Xc, self.components_.T)
+        return (X - self.mean_) @ self.components_.T
 
     def inverse_transform(self, X):
         """Map latent factors back to the original space."""
         check_is_fitted(self)
-        return np.dot(X, self.components_) + self.mean_
+        return (X @ self.components_) + self.mean_
+            

@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 from sklearn.utils.estimator_checks import check_estimator
 from sklearn.decomposition import PCA
+from numpy.testing import assert_allclose
 
 from src.models import NipalsPCA
 
@@ -79,6 +80,54 @@ def test_transform_inverse_consistency():
 
     np.testing.assert_allclose(X, X_reconstructed, atol=1e-5)
     
+
+def test_orthogonality():
+    """
+    Tests if the fitted model maintains orthonormal loadings 
+    and orthogonal factors.
+    """
+    # 1. Setup: Create a synthetic dataset
+    rng = np.random.default_rng(40)
+    X = rng.standard_normal((100, 10))
+    
+    # 2. Fit the model
+    n_components = 5
+    model = NipalsPCA(n_components=n_components)
+    model.fit(X)
+    
+    # P is (n_components, n_features)
+    P = model.components_ 
+    
+    # --- Test 1: Loadings Orthonormality ---
+    # P * P.T should be Identity matrix
+    loadings_identity = np.dot(P, P.T)
+    expected_identity = np.eye(n_components)
+    
+    assert_allclose(
+        loadings_identity, 
+        expected_identity, 
+        atol=1e-7,
+        err_msg="Loadings are not orthonormal! (P @ P.T != I)"
+    )
+
+    # --- Test 2: Factor (Score) Orthogonality ---
+    # T = (X - mean) @ P.T
+    X_centered = X - np.mean(X, axis=0)
+    T = np.dot(X_centered, P.T)
+    
+    # T.T * T should be a diagonal matrix (off-diagonals = 0)
+    scores_covariance = np.dot(T.T, T)
+    # Zero out the diagonal to check off-diagonal elements
+    off_diagonal = scores_covariance - np.diag(np.diag(scores_covariance))
+    
+    assert_allclose(
+        off_diagonal, 
+        0, 
+        atol=1e-3,
+        err_msg="Factors (scores) are not orthogonal! (T.T @ T is not diagonal)"
+    )
+
+
 # def test_sklearn_compatibility():
     """
     Optional: Runs scikit-learn's internal check_estimator 
